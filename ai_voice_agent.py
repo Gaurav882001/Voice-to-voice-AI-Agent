@@ -17,7 +17,7 @@ load_dotenv()
 # === Configuration ===
 DURATION = 5  # seconds to record query
 # GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_API_KEY = "YOUR_GROQ_API_KEY"
+GROQ_API_KEY = "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"
 app = FastAPI()
 
 # CORS setup to allow frontend communication
