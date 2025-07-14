@@ -16,14 +16,13 @@ load_dotenv()
 
 # === Configuration ===
 DURATION = 5  # seconds to record query
-# GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_API_KEY = "YOUR_API_KEY"
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 app = FastAPI()
 
 # CORS setup to allow frontend communication
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://192.168.21.63:3000"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
