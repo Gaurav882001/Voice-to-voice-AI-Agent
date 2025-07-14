@@ -1,7 +1,7 @@
 import os
 import tempfile
-import sounddevice as sd
-from scipy.io.wavfile import write
+# import sounddevice as sd
+# from scipy.io.wavfile import write
 from groq import Groq, APIError
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import FileResponse
@@ -17,7 +17,7 @@ load_dotenv()
 # === Configuration ===
 DURATION = 5  # seconds to record query
 # GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_API_KEY = "YOUR_API_KEY"
+GROQ_API_KEY = "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"
 app = FastAPI()
 
 # CORS setup to allow frontend communication
@@ -37,12 +37,12 @@ class PromptRequest(BaseModel):
     prompt: str
 
 # === Step 1: Record Audio (for testing locally, not used in API) ===
-def record_audio(filename, duration=DURATION):
-    sample_rate = 44100
-    audio = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1)
-    sd.wait()
-    write(filename, sample_rate, audio)
-    return filename
+# def record_audio(filename, duration=DURATION):
+#     sample_rate = 44100
+#     audio = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1)
+#     sd.wait()
+#     write(filename, sample_rate, audio)
+#     return filename
 
 # === Step 2: Transcribe Audio ===
 async def transcribe_audio(file: UploadFile):
