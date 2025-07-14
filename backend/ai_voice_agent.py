@@ -1,7 +1,7 @@
 import os
 import tempfile
-# import sounddevice as sd
-# from scipy.io.wavfile import write
+import sounddevice as sd
+from scipy.io.wavfile import write
 from groq import Groq, APIError
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import FileResponse
@@ -37,12 +37,12 @@ class PromptRequest(BaseModel):
     prompt: str
 
 # === Step 1: Record Audio (for testing locally, not used in API) ===
-# def record_audio(filename, duration=DURATION):
-#     sample_rate = 44100
-#     audio = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1)
-#     sd.wait()
-#     write(filename, sample_rate, audio)
-#     return filename
+def record_audio(filename, duration=DURATION):
+    sample_rate = 44100
+    audio = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1)
+    sd.wait()
+    write(filename, sample_rate, audio)
+    return filename
 
 # === Step 2: Transcribe Audio ===
 async def transcribe_audio(file: UploadFile):
