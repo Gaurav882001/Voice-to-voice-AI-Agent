@@ -1,5 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Square, Pause, X } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import rehypeRaw from 'rehype-raw';
 
 export default function VoiceAIAgent() {
   const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
@@ -7,26 +9,63 @@ export default function VoiceAIAgent() {
   const [isPaused, setIsPaused] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState('Click the square button to speak your query');
-  const [aiResponseText, setAiResponseText] = useState(''); // State for AI response
-  const [transcriptionText, setTranscriptionText] = useState(''); // State for transcription
+  const [transcriptionText, setTranscriptionText] = useState('');
+  const [chatHistory, setChatHistory] = useState([]);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const audioRef = useRef(new Audio());
+  const processingControllerRef = useRef(null);
 
   const startRecording = async () => {
     try {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = '';
+        audioRef.current = new Audio();
+      }
+      if (processingControllerRef.current) {
+        processingControllerRef.current.abort();
+        processingControllerRef.current = null;
+      }
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        mediaRecorderRef.current.stop();
+      }
+      setIsPaused(false);
+      setIsProcessing(false);
+      setTranscriptionText('');
+      setStatus('Starting recording...');
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaRecorderRef.current = new MediaRecorder(stream);
       audioChunksRef.current = [];
 
       mediaRecorderRef.current.ondataavailable = (event) => {
-        audioChunksRef.current.push(event.data);
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
       };
 
       mediaRecorderRef.current.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
-        await processAudio(audioBlob);
-        stream.getTracks().forEach(track => track.stop());
+        try {
+          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+          if (audioBlob.size === 0) {
+            throw new Error('Empty audio blob recorded');
+          }
+          await processAudio(audioBlob);
+        } catch (err) {
+          console.error('Error in onstop handler:', err);
+          setStatus('Error processing audio');
+          setIsProcessing(false);
+        } finally {
+          stream.getTracks().forEach(track => track.stop());
+        }
+      };
+
+      mediaRecorderRef.current.onerror = (err) => {
+        console.error('MediaRecorder error:', err);
+        setStatus('Recording error occurred');
+        setIsRecording(false);
+        setIsProcessing(false);
       };
 
       mediaRecorderRef.current.start();
@@ -35,6 +74,8 @@ export default function VoiceAIAgent() {
     } catch (err) {
       console.error('Error starting recording:', err);
       setStatus('Error accessing microphone. Please allow microphone access.');
+      setIsRecording(false);
+      setIsProcessing(false);
     }
   };
 
@@ -51,61 +92,68 @@ export default function VoiceAIAgent() {
     const match = errorMessage.match(/Please try again in (\d+h)?(\d+m)?(\d+\.\d+s)?/);
     if (!match) return null;
     let seconds = 0;
-    if (match[1]) seconds += parseInt(match[1]) * 3600; // Hours
-    if (match[2]) seconds += parseInt(match[2]) * 60; // Minutes
-    if (match[3]) seconds += parseFloat(match[3]); // Seconds
-    return seconds * 1000; // Convert to milliseconds
+    if (match[1]) seconds += parseInt(match[1]) * 3600;
+    if (match[2]) seconds += parseInt(match[2]) * 60;
+    if (match[3]) seconds += parseFloat(match[3]);
+    return seconds * 1000;
   };
 
   const processAudio = async (audioBlob, retryCount = 0, maxRetries = 3) => {
+    processingControllerRef.current = new AbortController();
     try {
       const formData = new FormData();
       formData.append('file', audioBlob, 'user_input.wav');
 
-      // Step 1: Transcribe audio
-      const transcribeResponse = await fetch(API_URL + '/transcribe', {
+      const transcribeResponse = await fetch(`${API_URL}/transcribe`, {
         method: 'POST',
         body: formData,
+        signal: processingControllerRef.current.signal,
       });
       if (!transcribeResponse.ok) {
         const errorData = await transcribeResponse.json();
         throw new Error(`Transcription failed: ${errorData.detail || transcribeResponse.statusText}`);
       }
       const { transcription } = await transcribeResponse.json();
-      console.log('Transcription:', transcription); // Log for debugging
+      console.log('Transcription:', transcription);
       if (!transcription || !transcription.trim()) {
         throw new Error('No valid transcription received');
       }
-      setTranscriptionText(transcription); // Store transcription
+      setTranscriptionText(transcription);
       setStatus(`You said: ${transcription}`);
 
-      // Step 2: Get AI response
-      const aiResponse = await fetch(API_URL + '/generate_response', {
+      const aiResponse = await fetch(`${API_URL}/generate_response`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: transcription }),
+        signal: processingControllerRef.current.signal,
       });
       if (!aiResponse.ok) {
         const errorData = await aiResponse.json();
         throw new Error(`AI response failed: ${errorData.detail || aiResponse.statusText}`);
       }
       const { response } = await aiResponse.json();
-      console.log('AI Response:', response); // Log for debugging
-      const truncatedResponse = response.slice(0, 200); // Match backend max_chars
-      setAiResponseText(response); // Store full response for display
+      console.log('AI Response:', response);
+      const truncatedResponse = response.slice(0, 200);
 
-      // Step 3: Generate and play TTS
+      // Add to chat history and clear current transcription
+      setChatHistory(prev => [
+        ...prev,
+        { user: transcription, ai: response }
+      ]);
+      setTranscriptionText('');
+
       try {
-        const ttsResponse = await fetch(API_URL + '/tts', {
+        const ttsResponse = await fetch(`${API_URL}/tts`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ prompt: truncatedResponse }),
+          signal: processingControllerRef.current.signal,
         });
         if (!ttsResponse.ok) {
           const errorData = await ttsResponse.json();
           if (ttsResponse.status === 429 && retryCount < maxRetries) {
-            const retryAfter = parseRetryAfter(errorData.detail) || 10000; // Default 10s
-            console.log(`Rate limit reached. Retrying in ${retryAfter / 1000} seconds...`); // Log to console
+            const retryAfter = parseRetryAfter(errorData.detail) || 10000;
+            console.log(`Rate limit reached. Retrying in ${retryAfter / 1000} seconds...`);
             await new Promise(resolve => setTimeout(resolve, retryAfter));
             return processAudio(audioBlob, retryCount + 1, maxRetries);
           }
@@ -114,19 +162,26 @@ export default function VoiceAIAgent() {
         const audioBlobTTS = await ttsResponse.blob();
         const audioUrl = URL.createObjectURL(audioBlobTTS);
         audioRef.current.src = audioUrl;
-        audioRef.current.play();
+        audioRef.current.play().catch(err => {
+          console.error('Audio playback error:', err);
+          setStatus('AI response received');
+        });
         setStatus('AI is responding...');
-        setAiResponseText(''); // Clear text if TTS succeeds
       } catch (ttsError) {
-        console.error('TTS Error:', ttsError); // Log error to console
-        setStatus(`You said: ${transcription}`); // Revert to showing transcription
-        // Keep aiResponseText set to display the response
+        console.error('TTS Error:', ttsError);
+        setStatus('AI response received');
       }
     } catch (err) {
-      console.error('Error processing audio:', err);
-      setStatus(transcriptionText ? `You said: ${transcriptionText}` : 'Error processing query');
+      if (err.name === 'AbortError') {
+        console.log('Processing aborted due to new recording');
+        setStatus('Click the square button to speak your query');
+      } else {
+        console.error('Error processing audio:', err);
+        setStatus(transcriptionText ? `You said: ${transcriptionText}` : `Error processing query: ${err.message}`);
+      }
     } finally {
       setIsProcessing(false);
+      processingControllerRef.current = null;
     }
   };
 
@@ -139,8 +194,12 @@ export default function VoiceAIAgent() {
   };
 
   const togglePause = () => {
+    if (!audioRef.current.src || isProcessing) return;
     if (isPaused) {
-      audioRef.current.play();
+      audioRef.current.play().catch(err => {
+        console.error('Audio playback error:', err);
+        setStatus('Error resuming audio');
+      });
       setIsPaused(false);
       setStatus('AI is responding...');
     } else {
@@ -151,14 +210,23 @@ export default function VoiceAIAgent() {
   };
 
   const handleEndCall = () => {
-    stopRecording();
-    audioRef.current.pause();
-    audioRef.current.src = '';
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.stop();
+    }
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = '';
+    }
+    if (processingControllerRef.current) {
+      processingControllerRef.current.abort();
+      processingControllerRef.current = null;
+    }
     setIsPaused(false);
     setIsProcessing(false);
+    setIsRecording(false);
     setStatus('Click the square button to speak your query');
-    setAiResponseText(''); // Clear response text
-    setTranscriptionText(''); // Clear transcription text
+    setTranscriptionText('');
+    setChatHistory([]);
   };
 
   return (
@@ -167,25 +235,78 @@ export default function VoiceAIAgent() {
         <style>
           {`
             .scrollbar-hide {
-              -ms-overflow-style: none; /* IE and Edge */
-              scrollbar-width: none; /* Firefox */
+              -ms-overflow-style: none;
+              scrollbar-width: none;
             }
             .scrollbar-hide::-webkit-scrollbar {
-              display: none; /* Chrome, Safari, and Opera */
+              display: none;
+            }
+            .markdown-content h1, .markdown-content h2, .markdown-content h3 {
+              color: #ffffff;
+              font-weight: bold;
+              margin-bottom: 0.5rem;
+            }
+            .markdown-content p {
+              color: #d1d5db;
+              margin-bottom: 0.5rem;
+            }
+            .markdown-content ul, .markdown-content ol {
+              color: #d1d5db;
+              margin-left: 1.5rem;
+              margin-bottom: 0.5rem;
+            }
+            .markdown-content li {
+              margin-bottom: 0.25rem;
+            }
+            .markdown-content strong {
+              color: #ffffff;
+            }
+            .markdown-content a {
+              color: #60a5fa;
+              text-decoration: underline;
+            }
+            .markdown-content code {
+              background-color: #1f2937;
+              padding: 0.2rem 0.4rem;
+              border-radius: 0.25rem;
+              color: #f3f4f6;
+            }
+            .markdown-content pre {
+              background-color: #1f2937;
+              padding: 1rem;
+              border-radius: 0.5rem;
+              overflow-x: auto;
+            }
+            .user-message {
+              background-color: #374151;
+              border-radius: 0.5rem 0.5rem 0 0.5rem;
+              padding: 0.75rem;
+              margin-bottom: 0.5rem;
+              margin-left: 1rem;
+              max-width: 80%;
+              align-self: flex-end;
+            }
+            .ai-message {
+              background-color: #1f2937;
+              border-radius: 0.5rem 0.5rem 0.5rem 0;
+              padding: 0.75rem;
+              margin-bottom: 0.5rem;
+              margin-right: 1rem;
+              max-width: 80%;
+              align-self: flex-start;
             }
           `}
         </style>
         <div className="absolute bottom-0 left-0 right-0 h-64 bg-gradient-to-t from-blue-500/30 via-blue-600/20 to-transparent"></div>
         
-        <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 flex items-center space syour querypace-x-6">
+        <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 flex items-center space-x-6">
           <button
             onClick={toggleRecording}
-            disabled={isProcessing}
             className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-200 ${
               isRecording 
                 ? 'bg-red-500/80 hover:bg-red-400/80' 
                 : 'bg-gray-700/80 hover:bg-gray-600/80'
-            } ${isProcessing ? 'opacity-50 cursor-not-allowed' : ''}`}
+            }`}
             title={isRecording ? 'Stop recording' : 'Start recording'}
           >
             <Square 
@@ -224,22 +345,29 @@ export default function VoiceAIAgent() {
             <div className={`w-2 h-2 rounded-full ${isRecording ? 'bg-red-400 animate-pulse' : isProcessing ? 'bg-yellow-400 animate-pulse' : 'bg-green-400'}`}></div>
             <span className="text-white text-sm">{status}</span>
           </div>
-          {(transcriptionText || aiResponseText) && (
-            <div className="mt-4 p-4 bg-black/60 rounded-lg text-white text-sm max-h-96 overflow-y-auto scrollbar-hide">
-              {/* {transcriptionText && (
-                <>
-                  <h3 className="font-bold mb-2">Your Query:</h3>
+          <div className="mt-4 p-4 bg-black/60 rounded-lg text-white text-sm max-h-[calc(100vh-200px)] overflow-y-auto scrollbar-hide flex flex-col">
+            {chatHistory.map((chat, index) => (
+              <div key={index} className="flex flex-col">
+                <div className="user-message">
+                  <p>{chat.user}</p>
+                </div>
+                <div className="ai-message">
+                  <div className="markdown-content">
+                    <ReactMarkdown rehypePlugins={[rehypeRaw]}>
+                      {chat.ai}
+                    </ReactMarkdown>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {transcriptionText && (
+              <div className="flex flex-col">
+                <div className="user-message">
                   <p>{transcriptionText}</p>
-                </>
-              )} */}
-              {aiResponseText && (
-                <>
-                  <h3 className="font-bold mb-2 mt-4">AI Response:</h3>
-                  <p>{aiResponseText}</p>
-                </>
-              )}
-            </div>
-          )}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
