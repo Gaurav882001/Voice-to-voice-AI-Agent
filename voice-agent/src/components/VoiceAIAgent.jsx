@@ -121,10 +121,11 @@ export default function VoiceAIAgent() {
       setTranscriptionText(transcription);
       setStatus(`You said: ${transcription}`);
 
+      console.log('Chat History before request:', JSON.stringify(chatHistory)); // Enhanced logging
       const aiResponse = await fetch(`${API_URL}/generate_response`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: transcription }),
+        body: JSON.stringify({ prompt: transcription, chat_history: chatHistory }),
         signal: processingControllerRef.current.signal,
       });
       if (!aiResponse.ok) {
@@ -133,20 +134,20 @@ export default function VoiceAIAgent() {
       }
       const { response } = await aiResponse.json();
       console.log('AI Response:', response);
-      const truncatedResponse = response.slice(0, 200);
 
-      // Add to chat history and clear current transcription
-      setChatHistory(prev => [
-        ...prev,
-        { user: transcription, ai: response }
-      ]);
+      // Update chat history with the new interaction
+      setChatHistory(prev => {
+        const updatedHistory = [...prev, { user: transcription, ai: response }];
+        console.log('Updated Chat History:', JSON.stringify(updatedHistory)); // Enhanced logging
+        return updatedHistory;
+      });
       setTranscriptionText('');
 
       try {
         const ttsResponse = await fetch(`${API_URL}/tts`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt: truncatedResponse }),
+          body: JSON.stringify({ prompt: response }),
           signal: processingControllerRef.current.signal,
         });
         if (!ttsResponse.ok) {
